@@ -1,0 +1,31 @@
+services:
+  granite-4-tiny:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RUST_VERSION: "1.88.0"
+        APP_NAME: "granite-4-tiny"
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    runtime: nvidia
+    environment:
+      BIND_HOST: "0.0.0.0"
+      BIND_PORT: "3000"
+      LLAMA_SERVER_PATH: "/opt/llama/llama-server.cuda"
+      MODEL_PATH: "/models/granite-4.0-h-tiny-Q8_0.gguf"
+      LLAMA_HOST: "127.0.0.1"
+      LLAMA_PORT: "8080"
+      CTX: "8192"
+      N_GPU_LAYERS: "99"
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+      LD_LIBRARY_PATH: "/opt/llama:/usr/local/cuda/targets/aarch64-linux/lib:/usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu"
+    volumes:
+      - ./llama-server:/opt/llama:ro
+      - ./models:/models:ro
+      - /usr/local/cuda/targets/aarch64-linux/lib:/usr/local/cuda/targets/aarch64-linux/lib:ro
+      - /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro
+      - /usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/nvidia:ro
