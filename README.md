@@ -3,7 +3,7 @@
 [![CI](https://github.com/DocDBrown/IBMGranite4Tiny/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DocDBrown/IBMGranite4Tiny/actions/workflows/ci.yml)
 [![mof-class3-qualified](https://mot.isitopen.ai/modules/mof/assets/badge_class3_qualified.png)](https://mot.isitopen.ai/model/1161)
 
-📣 **Update [10-07-2025]:** Added a *default system prompt* to the chat template to guide the model towards more *professional, accurate, and safe* responses.
+💡 Designed for Deep Research Pipelines 💡
 
 **Model Summary:**
 Granite-4.0-H-Tiny is a 7B parameter long-context instruct model finetuned from *Granite-4.0-H-Tiny-Base* using a combination of open source instruction datasets with permissive license and internally collected synthetic datasets. This model is developed using a diverse set of techniques with a structured chat format, including supervised finetuning, model alignment using reinforcement learning, and model merging. Granite 4.0 instruct models feature improved *instruction following (IF)* and *tool-calling* capabilities, making them more effective in enterprise applications.
