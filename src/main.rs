@@ -27,6 +27,13 @@ fn env_u16(name: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
 fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
@@ -152,23 +159,80 @@ fn filter_headers(headers: HeaderMap) -> HeaderMap {
     out
 }
 
-async fn wait_for_upstream(client: &reqwest::Client, base: &str, timeout_s: u64) -> bool {
+async fn wait_for_upstream(
+    client: &reqwest::Client,
+    base: &str,
+    timeout_s: u64,
+    poll_ms: u64,
+    child_slot: &Arc<Mutex<Option<Child>>>,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(timeout_s);
     let url = format!("{base}/health");
+
+    let mut last_progress_log = Instant::now();
+    let progress_every = Duration::from_secs(10);
+
     loop {
+        // Fail fast if the child process has exited.
+        {
+            let mut lock = child_slot.lock().await;
+            if let Some(child) = lock.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        return Err(format!(
+                            "llama-server exited before becoming ready: {status}"
+                        ));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        return Err(format!("failed to check llama-server status: {e}"));
+                    }
+                }
+            }
+        }
+
         if Instant::now() > deadline {
-            return false;
+            return Err(format!(
+                "timeout waiting for llama-server readiness after {timeout_s}s (still returning non-200 from {url})"
+            ));
         }
-        let ok = client
-            .get(&url)
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        if ok {
-            return true;
+
+        match client.get(&url).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+
+                // Ready: any 2xx is good enough for our proxy.
+                if status.is_success() {
+                    return Ok(());
+                }
+
+                // Common during model load:
+                // llama.cpp documents /health returning 503 while loading. :contentReference[oaicite:1]{index=1}
+                if status.as_u16() == 503 {
+                    // Consume the body (best-effort) so keep-alive connections behave well.
+                    // We don't require JSON parsing here to avoid adding dependencies.
+                    let _ = resp.text().await; // reqwest Response::text() :contentReference[oaicite:2]{index=2}
+                } else {
+                    // Any other non-success status is unexpected: include body to help diagnose.
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(format!(
+                        "unexpected /health response from llama-server: HTTP {status} body={body}"
+                    ));
+                }
+            }
+            Err(_) => {
+                // Connection errors are expected early in startup; keep waiting.
+            }
         }
-        sleep(Duration::from_millis(250)).await;
+
+        if last_progress_log.elapsed() >= progress_every {
+            eprintln!(
+                "waiting for llama-server readiness (polling {url}); this can take minutes for large models"
+            );
+            last_progress_log = Instant::now();
+        }
+
+        sleep(Duration::from_millis(poll_ms.max(50))).await;
     }
 }
 
@@ -215,14 +279,8 @@ async fn main() {
     let bind_host = env_string("BIND_HOST", "0.0.0.0");
     let bind_port = env_u16("BIND_PORT", 3000);
 
-    let llama_server_path = env_string(
-        "LLAMA_SERVER_PATH",
-        "/home/ubuntu/llama.cpp/build/bin/llama-server",
-    );
-    let model_path = env_string(
-        "MODEL_PATH",
-        "/home/ubuntu/models/granite-4.0-h-tiny-Q8_0.gguf",
-    );
+    let llama_server_path = env_string("LLAMA_SERVER_PATH", "/usr/local/bin/llama-server");
+    let model_path = env_string("MODEL_PATH", "/models/granite-4.0-h-tiny-Q8_0.gguf");
     let llama_host = env_string("LLAMA_HOST", "127.0.0.1");
     let llama_port = env_u16("LLAMA_PORT", 8080);
 
@@ -231,12 +289,23 @@ async fn main() {
     // default 99, set N_GPU_LAYERS=-1 to omit -ngl
     let n_gpu_layers: isize = env_isize("N_GPU_LAYERS", 99);
 
+    // Readiness tuning (important for large GGUF loads on CPU)
+    let ready_timeout_s = env_u64("LLAMA_READY_TIMEOUT_SECS", 1800); // 30 minutes
+    let ready_poll_ms = env_u64("LLAMA_READY_POLL_MS", 250);
+
     let upstream_base = format!("http://{llama_host}:{llama_port}");
 
+    // Client for proxying requests (can be long-running)
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .build()
         .expect("reqwest client");
+
+    // Separate client for readiness checks (keep it snappy)
+    let health_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest health client");
 
     let child_slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
 
@@ -257,9 +326,16 @@ async fn main() {
     }
 
     // Wait until llama-server is ready
-    let ready = wait_for_upstream(&client, &upstream_base, 60).await;
-    if !ready {
-        eprintln!("llama-server did not become ready within timeout");
+    if let Err(e) = wait_for_upstream(
+        &health_client,
+        &upstream_base,
+        ready_timeout_s,
+        ready_poll_ms,
+        &child_slot,
+    )
+    .await
+    {
+        eprintln!("{e}");
         std::process::exit(1);
     }
 

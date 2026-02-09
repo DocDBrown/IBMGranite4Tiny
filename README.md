@@ -5,6 +5,16 @@
 
 💡 Designed for Deep Research Pipelines 💡
 
+curl -X POST "http://localhost:3666/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "granite-4-tiny",
+        "messages": [
+          {"role": "user", "content": "Hello, how are you?"}
+        ]
+      }'
+
+
 **Model Summary:**
 Granite-4.0-H-Tiny is a 7B parameter long-context instruct model finetuned from *Granite-4.0-H-Tiny-Base* using a combination of open source instruction datasets with permissive license and internally collected synthetic datasets. This model is developed using a diverse set of techniques with a structured chat format, including supervised finetuning, model alignment using reinforcement learning, and model merging. Granite 4.0 instruct models feature improved *instruction following (IF)* and *tool-calling* capabilities, making them more effective in enterprise applications.
 
